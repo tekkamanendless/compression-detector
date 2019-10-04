@@ -13,6 +13,7 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/golang/snappy"
+	"github.com/pierrec/lz4"
 	"github.com/rasky/go-lzo"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -117,6 +118,21 @@ var decompressionFunctions = []DecompressionFunction{
 		Decompress: func(data []byte) ([]byte, error) {
 			buffer := bytes.NewBuffer(data)
 			result, err := lzo.Decompress1X(buffer, 0 /*inLen*/, 0 /*outLen*/)
+			if err != nil {
+				return nil, err
+			}
+			if buffer.Len() > 0 {
+				return nil, fmt.Errorf("Buffer still has %d bytes (only read %d)", buffer.Len(), len(data)-buffer.Len())
+			}
+			return result, nil
+		},
+	},
+	DecompressionFunction{
+		Name: "lz4",
+		Decompress: func(data []byte) ([]byte, error) {
+			buffer := bytes.NewBuffer(data)
+			reader := lz4.NewReader(buffer)
+			result, err := ioutil.ReadAll(reader)
 			if err != nil {
 				return nil, err
 			}
