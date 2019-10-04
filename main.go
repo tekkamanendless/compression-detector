@@ -12,7 +12,7 @@ import (
 	"os"
 
 	"github.com/davecgh/go-spew/spew"
-
+	"github.com/golang/snappy"
 	"github.com/rasky/go-lzo"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -20,6 +20,7 @@ import (
 
 func main() {
 	var debugValue bool
+	var stripLimit int
 
 	var rootCommand = &cobra.Command{
 		Use:   "compression-detector",
@@ -50,12 +51,13 @@ This tool attempts to determine the type of compression used in a file.
 				if err != nil {
 					panic(err)
 				}
-				results := detectCompression(contents)
+				results := detectCompression(contents, stripLimit)
 				spew.Dump(results)
 			}
 		},
 	}
 	rootCommand.PersistentFlags().BoolVar(&debugValue, "debug", false, `Enable debug output`)
+	rootCommand.PersistentFlags().IntVar(&stripLimit, "strip-limit", 100, `Only strip off (at most) this many bytes from the front (use -1 for no limit)`)
 
 	err := rootCommand.Execute()
 	if err != nil {
@@ -349,21 +351,54 @@ var decompressionFunctions = []DecompressionFunction{
 		},
 	},
 	DecompressionFunction{
-		Name: "zlib",
+		Name: "snappy-block",
 		Decompress: func(data []byte) ([]byte, error) {
-			reader, err := zlib.NewReader(bytes.NewBuffer(data))
+			return snappy.Decode(nil, data)
+		},
+	},
+	DecompressionFunction{
+		Name: "snappy-stream",
+		Decompress: func(data []byte) ([]byte, error) {
+			buffer := bytes.NewBuffer(data)
+			reader := snappy.NewReader(buffer)
+			result, err := ioutil.ReadAll(reader)
 			if err != nil {
 				return nil, err
 			}
-			return ioutil.ReadAll(reader)
+			if buffer.Len() > 0 {
+				return nil, fmt.Errorf("Buffer still has %d bytes (only read %d)", buffer.Len(), len(data)-buffer.Len())
+			}
+			return result, nil
+		},
+	},
+	DecompressionFunction{
+		Name: "zlib",
+		Decompress: func(data []byte) ([]byte, error) {
+			buffer := bytes.NewBuffer(data)
+			reader, err := zlib.NewReader(buffer)
+			if err != nil {
+				return nil, err
+			}
+			defer reader.Close()
+			result, err := ioutil.ReadAll(reader)
+			if err != nil {
+				return nil, err
+			}
+			if buffer.Len() > 0 {
+				return nil, fmt.Errorf("Buffer still has %d bytes (only read %d)", buffer.Len(), len(data)-buffer.Len())
+			}
+			return result, nil
 		},
 	},
 }
 
-func detectCompression(contents []byte) []DecompressionResult {
+func detectCompression(contents []byte, stripLimit int) []DecompressionResult {
 	results := []DecompressionResult{}
 
-	for startByte := 0; startByte < len(contents); startByte++ {
+	if stripLimit < 0 {
+		stripLimit = len(contents)
+	}
+	for startByte := 0; startByte < stripLimit; startByte++ {
 		theseContents := contents[startByte:]
 		logrus.Debugf("Start byte %d (%d)", startByte, len(theseContents))
 
